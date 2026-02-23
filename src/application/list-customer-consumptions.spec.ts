@@ -30,12 +30,4 @@ describe("ListCustomerConsumptionsUseCase", () => {
     expect(result.length).toBe(1);
     expect(result[0].id).toBe("c1");
   });
-
-  it("Deve lançar erro quando customerId não for informado", async () => {
-    const useCase = new ListCustomerConsumptionsUseCase(query);
-
-    await expect(useCase.execute({ customerId: "" })).rejects.toThrow(
-      "CustomerId is required",
-    );
-  });
 });

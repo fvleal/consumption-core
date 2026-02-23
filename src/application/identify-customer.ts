@@ -1,4 +1,5 @@
 import { CustomerLookupPort } from "@ports/customer-lookup-port";
+import { CustomerNotFoundError } from "./errors/customer-not-found.error";
 
 export interface IdentifyCustomerInput {
   cpf: string;
@@ -14,14 +15,10 @@ export class IdentifyCustomerUseCase {
   constructor(private readonly customerLookup: CustomerLookupPort) {}
 
   async execute(input: IdentifyCustomerInput): Promise<IdentifyCustomerOutput> {
-    if (!input.cpf) {
-      throw new Error("CPF is required");
-    }
-
     const customer = await this.customerLookup.findByCPF(input.cpf);
 
     if (!customer) {
-      throw new Error("Customer not found");
+      throw new CustomerNotFoundError();
     }
 
     return {

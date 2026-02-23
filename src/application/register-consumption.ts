@@ -3,6 +3,9 @@ import { ConsumptionRepositoryPort } from "@ports/consumption-repository-port";
 import { CustomerLookupPort } from "@ports/customer-lookup-port";
 import { ProductLookupPort } from "@ports/product-lookup-port";
 
+import { CustomerNotFoundError } from "./errors/customer-not-found.error";
+import { ProductNotFoundError } from "./errors/product-not-found.error";
+
 export interface RegisterConsumptionItemInput {
   productId: string;
   quantity: number;
@@ -32,24 +35,16 @@ export class RegisterConsumptionUseCase {
     const customerExists = await this.customerLookup.exists(input.customerId);
 
     if (!customerExists) {
-      throw new Error("Customer not found");
-    }
-
-    if (input.items.length === 0) {
-      throw new Error("At least one item is required");
+      throw new CustomerNotFoundError();
     }
 
     const consumption = Consumption.create(input.customerId);
 
     for (const item of input.items) {
-      if (item.quantity <= 0) {
-        throw new Error("Quantity must be greater than zero");
-      }
-
       const product = await this.productLookup.findById(item.productId);
 
       if (!product) {
-        throw new Error(`Product ${item.productId} not found`);
+        throw new ProductNotFoundError(item.productId);
       }
 
       consumption.addItem({
@@ -58,6 +53,8 @@ export class RegisterConsumptionUseCase {
         unitPrice: product.price,
       });
     }
+
+    consumption.register();
 
     await this.consumptionRepository.save(consumption);
 

@@ -1,195 +1,138 @@
-import { createConsumptionRepositoryMock } from "@test/mocks/create-consumption-repository-mock";
-import { createCustomerLookupMock } from "@test/mocks/create-customer-lookup-mock";
-import { createPixPaymentMock } from "@test/mocks/create-pix-payment-mock";
-import { GenerateConsumptionPixPaymentUseCase } from "@application/generate-consumption-pix-payment";
-import { Consumption } from "@domain/consumption";
+import { Consumption, ConsumptionStatus } from "@domain/consumption";
+import { ConsumptionNotFoundError } from "./errors/consumption-not-found.error";
+import { ConsumptionDoesNotBelongToCustomerError } from "./errors/consumption-does-not-belong-to-customer.error";
+import { InvalidTotalAmountError } from "@domain/consumption.errors";
+import { CustomerNotFoundError } from "./errors/customer-not-found.error";
+import { GenerateConsumptionPixPaymentUseCase } from "./generate-consumption-pix-payment";
+import { ConsumptionRepositoryPort } from "@ports/consumption-repository-port";
+import { CustomerLookupPort } from "@ports/customer-lookup-port";
+import { PixPaymentPort } from "@ports/pix-payment-port";
 
 describe("GenerateConsumptionPixPaymentUseCase", () => {
-  let repository = createConsumptionRepositoryMock();
-  let customerLookup = createCustomerLookupMock();
-  let pixPort = createPixPaymentMock();
+  let consumptionRepository: jest.Mocked<ConsumptionRepositoryPort>;
+  let customerLookup: jest.Mocked<CustomerLookupPort>;
+  let pixPaymentPort: jest.Mocked<PixPaymentPort>;
+  let useCase: GenerateConsumptionPixPaymentUseCase;
 
   beforeEach(() => {
-    repository = createConsumptionRepositoryMock();
-    customerLookup = createCustomerLookupMock();
-    pixPort = createPixPaymentMock();
+    consumptionRepository = {
+      findById: jest.fn(),
+      save: jest.fn(),
+    } as jest.Mocked<ConsumptionRepositoryPort>;
+
+    customerLookup = {
+      findById: jest.fn(),
+      exists: jest.fn(),
+      findByCPF: jest.fn(),
+    } as jest.Mocked<CustomerLookupPort>;
+
+    pixPaymentPort = {
+      generateQrCode: jest.fn(),
+    } as jest.Mocked<PixPaymentPort>;
+
+    useCase = new GenerateConsumptionPixPaymentUseCase(
+      consumptionRepository,
+      customerLookup,
+      pixPaymentPort,
+    );
   });
 
-  it("Deve gerar QR Code consolidado quando todos os consumos forem válidos", async () => {
-    const c1 = Consumption.create("customer-1");
-    c1.addItem({ productId: "p1", quantity: 1, unitPrice: 10 });
+  const buildConsumption = (overrides?: {
+    customerId?: string;
+    status?: ConsumptionStatus;
+    totalAmount?: number;
+  }) => {
+    const consumption = Consumption.create(
+      overrides?.customerId ?? "customer-1",
+    );
 
-    const c2 = Consumption.create("customer-1");
-    c2.addItem({ productId: "p2", quantity: 2, unitPrice: 10 });
+    if ((overrides?.totalAmount ?? 100) > 0) {
+      consumption.addItem({
+        productId: "prod-1",
+        quantity: 1,
+        unitPrice: overrides?.totalAmount ?? 100,
+      });
+    }
 
-    repository.findById.mockResolvedValueOnce(c1).mockResolvedValueOnce(c2);
+    if (overrides?.status === ConsumptionStatus.PAID) {
+      consumption.markAsPaid("ref");
+    }
+
+    return consumption;
+  };
+
+  it("deve gerar o pagamento via Pix com sucesso", async () => {
+    consumptionRepository.findById.mockResolvedValue(buildConsumption());
 
     customerLookup.findById.mockResolvedValue({
       id: "customer-1",
-      fullName: "João Silva",
+      fullName: "John Doe",
       cpf: "12345678900",
     });
 
-    pixPort.generateQrCode.mockResolvedValue({
-      paymentId: "payment-123",
-      qrCode: "qr-code-string",
+    pixPaymentPort.generateQrCode.mockResolvedValue({
+      paymentId: "payment-1",
+      qrCode: "qr-code",
     });
-
-    const useCase = new GenerateConsumptionPixPaymentUseCase(
-      repository,
-      customerLookup,
-      pixPort,
-    );
 
     const result = await useCase.execute({
-      consumptionIds: [c1.id, c2.id],
+      consumptionIds: ["cons-1"],
     });
 
-    expect(result.amount).toBe(30);
-    expect(result.paymentId).toBe("payment-123");
-    expect(pixPort.generateQrCode).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      amount: 100,
+      paymentId: "payment-1",
+      qrCode: "qr-code",
+    });
+
+    expect(pixPaymentPort.generateQrCode).toHaveBeenCalledTimes(1);
   });
 
-  it("Deve lançar erro quando nenhum consumo for informado", async () => {
-    const useCase = new GenerateConsumptionPixPaymentUseCase(
-      repository,
-      customerLookup,
-      pixPort,
-    );
+  it("deve lançar ConsumptionNotFoundError quando a consumação não for encontrada", async () => {
+    consumptionRepository.findById.mockResolvedValue(null);
 
-    await expect(useCase.execute({ consumptionIds: [] })).rejects.toThrow(
-      "At least one consumption is required",
-    );
-
-    expect(pixPort.generateQrCode).not.toHaveBeenCalled();
+    await expect(
+      useCase.execute({ consumptionIds: ["cons-1"] }),
+    ).rejects.toBeInstanceOf(ConsumptionNotFoundError);
   });
 
-  it("Deve lançar erro quando algum consumo não existir", async () => {
-    repository.findById.mockResolvedValue(null);
+  it("deve lançar ConsumptionDoesNotBelongToCustomerError quando as consumações pertencerem a clientes diferentes", async () => {
+    consumptionRepository.findById
+      .mockResolvedValueOnce(buildConsumption({ customerId: "c1" }))
+      .mockResolvedValueOnce(buildConsumption({ customerId: "c2" }));
 
-    const useCase = new GenerateConsumptionPixPaymentUseCase(
-      repository,
-      customerLookup,
-      pixPort,
+    await expect(
+      useCase.execute({ consumptionIds: ["1", "2"] }),
+    ).rejects.toBeInstanceOf(ConsumptionDoesNotBelongToCustomerError);
+  });
+
+  it("deve lançar InvalidTotalAmountError quando o valor total for menor ou igual a zero", async () => {
+    consumptionRepository.findById.mockResolvedValue(
+      buildConsumption({ totalAmount: 0 }),
     );
 
     await expect(
-      useCase.execute({ consumptionIds: ["invalid"] }),
-    ).rejects.toThrow("One or more consumptions not found");
-
-    expect(pixPort.generateQrCode).not.toHaveBeenCalled();
+      useCase.execute({ consumptionIds: ["1"] }),
+    ).rejects.toBeInstanceOf(InvalidTotalAmountError);
   });
 
-  it("Deve lançar erro quando consumos pertencerem a clientes diferentes", async () => {
-    const c1 = Consumption.create("customer-1");
-    c1.addItem({ productId: "p1", quantity: 1, unitPrice: 10 });
-
-    const c2 = Consumption.create("customer-2");
-    c2.addItem({ productId: "p2", quantity: 1, unitPrice: 10 });
-
-    repository.findById.mockResolvedValueOnce(c1).mockResolvedValueOnce(c2);
-
-    const useCase = new GenerateConsumptionPixPaymentUseCase(
-      repository,
-      customerLookup,
-      pixPort,
-    );
-
-    await expect(
-      useCase.execute({ consumptionIds: [c1.id, c2.id] }),
-    ).rejects.toThrow("Consumptions must belong to the same customer");
-
-    expect(pixPort.generateQrCode).not.toHaveBeenCalled();
-  });
-
-  it("Deve lançar erro quando algum consumo estiver pago", async () => {
-    const c1 = Consumption.create("customer-1");
-    c1.addItem({ productId: "p1", quantity: 1, unitPrice: 10 });
-    c1.markAsPaid("ref");
-
-    repository.findById.mockResolvedValue(c1);
-
-    const useCase = new GenerateConsumptionPixPaymentUseCase(
-      repository,
-      customerLookup,
-      pixPort,
-    );
-
-    await expect(useCase.execute({ consumptionIds: [c1.id] })).rejects.toThrow(
-      "One or more consumptions are already paid",
-    );
-
-    expect(pixPort.generateQrCode).not.toHaveBeenCalled();
-  });
-
-  it("Deve permitir gerar cobrança quando consumo estiver vencido", async () => {
-    const c1 = Consumption.create("customer-1");
-    c1.addItem({ productId: "p1", quantity: 1, unitPrice: 10 });
-    c1.markAsOverdue();
-
-    repository.findById.mockResolvedValue(c1);
-
-    customerLookup.findById.mockResolvedValue({
-      id: "customer-1",
-      fullName: "João Silva",
-      cpf: "12345678900",
-    });
-
-    pixPort.generateQrCode.mockResolvedValue({
-      paymentId: "payment-123",
-      qrCode: "qr",
-    });
-
-    const useCase = new GenerateConsumptionPixPaymentUseCase(
-      repository,
-      customerLookup,
-      pixPort,
-    );
-
-    const result = await useCase.execute({
-      consumptionIds: [c1.id],
-    });
-
-    expect(result.amount).toBe(10);
-    expect(pixPort.generateQrCode).toHaveBeenCalledTimes(1);
-  });
-
-  it("Deve lançar erro quando o valor total for zero", async () => {
-    const c1 = Consumption.create("customer-1");
-
-    repository.findById.mockResolvedValue(c1);
-
-    const useCase = new GenerateConsumptionPixPaymentUseCase(
-      repository,
-      customerLookup,
-      pixPort,
-    );
-
-    await expect(useCase.execute({ consumptionIds: [c1.id] })).rejects.toThrow(
-      "Total amount must be greater than zero",
-    );
-
-    expect(pixPort.generateQrCode).not.toHaveBeenCalled();
-  });
-
-  it("Deve lançar erro quando cliente não for encontrado", async () => {
-    const c1 = Consumption.create("customer-1");
-    c1.addItem({ productId: "p1", quantity: 1, unitPrice: 10 });
-
-    repository.findById.mockResolvedValue(c1);
+  it("deve lançar CustomerNotFoundError quando o cliente não for encontrado", async () => {
+    consumptionRepository.findById.mockResolvedValue(buildConsumption());
 
     customerLookup.findById.mockResolvedValue(null);
 
-    const useCase = new GenerateConsumptionPixPaymentUseCase(
-      repository,
-      customerLookup,
-      pixPort,
-    );
+    await expect(
+      useCase.execute({ consumptionIds: ["1"] }),
+    ).rejects.toBeInstanceOf(CustomerNotFoundError);
+  });
 
-    await expect(useCase.execute({ consumptionIds: [c1.id] })).rejects.toThrow(
-      "Customer not found",
-    );
+  it("deve lançar ArgumentInvalidException quando forem fornecidos consumos duplicados", async () => {
+    await expect(
+      useCase.execute({
+        consumptionIds: ["cons-1", "cons-1"],
+      }),
+    ).rejects.toThrow("Duplicated consumption ids are not allowed");
 
-    expect(pixPort.generateQrCode).not.toHaveBeenCalled();
+    expect(consumptionRepository.findById).not.toHaveBeenCalled();
   });
 });

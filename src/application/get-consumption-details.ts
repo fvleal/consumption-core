@@ -1,5 +1,7 @@
 import { ConsumptionDetailsQueryPort } from "@ports/consumption-details-query-port";
 
+import { ConsumptionNotFoundError } from "./errors/consumption-not-found.error";
+
 export interface GetConsumptionDetailsInput {
   consumptionId: string;
 }
@@ -23,14 +25,10 @@ export class GetConsumptionDetailsUseCase {
   async execute(
     input: GetConsumptionDetailsInput,
   ): Promise<GetConsumptionDetailsOutput> {
-    if (!input.consumptionId) {
-      throw new Error("ConsumptionId is required");
-    }
-
     const consumption = await this.query.findById(input.consumptionId);
 
     if (!consumption) {
-      throw new Error("Consumption not found");
+      throw new ConsumptionNotFoundError();
     }
 
     return {

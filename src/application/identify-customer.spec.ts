@@ -30,16 +30,6 @@ describe("IdentifyCustomerUseCase", () => {
     });
   });
 
-  it("Deve lançar erro quando CPF não for informado", async () => {
-    const useCase = new IdentifyCustomerUseCase(customerLookup);
-
-    await expect(useCase.execute({ cpf: "" })).rejects.toThrow(
-      "CPF is required",
-    );
-
-    expect(customerLookup.findByCPF).not.toHaveBeenCalled();
-  });
-
   it("Deve lançar erro quando cliente não existir", async () => {
     customerLookup.findByCPF.mockResolvedValue(null);
 

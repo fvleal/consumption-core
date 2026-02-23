@@ -10,6 +10,7 @@ const config: Config = {
     "^@application/(.*)$": "<rootDir>/src/application/$1",
     "^@ports/(.*)$": "<rootDir>/src/ports/$1",
     "^@test/(.*)$": "<rootDir>/src/test/$1",
+    "^@libs/(.*)$": "<rootDir>/src/libs/$1",
   },
 };
 

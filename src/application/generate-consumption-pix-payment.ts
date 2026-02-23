@@ -1,6 +1,15 @@
 import { ConsumptionRepositoryPort } from "@ports/consumption-repository-port";
 import { CustomerLookupPort } from "@ports/customer-lookup-port";
 import { PixPaymentPort } from "@ports/pix-payment-port";
+import { ConsumptionNotFoundError } from "./errors/consumption-not-found.error";
+import { ConsumptionDoesNotBelongToCustomerError } from "./errors/consumption-does-not-belong-to-customer.error";
+import {
+  ConsumptionAlreadyPaidError,
+  InvalidTotalAmountError,
+} from "@domain/consumption.errors";
+import { CustomerNotFoundError } from "./errors/customer-not-found.error";
+import { ConsumptionStatus } from "@domain/consumption";
+import { ArgumentInvalidException } from "@libs/exceptions";
 
 interface GenerateConsumptionPixPaymentInput {
   consumptionIds: string[];
@@ -22,16 +31,24 @@ export class GenerateConsumptionPixPaymentUseCase {
   async execute(
     input: GenerateConsumptionPixPaymentInput,
   ): Promise<GenerateConsumptionPixPaymentOutput> {
-    if (!input.consumptionIds || input.consumptionIds.length === 0) {
-      throw new Error("At least one consumption is required");
+    const uniqueIds = new Set(input.consumptionIds);
+
+    if (uniqueIds.size !== input.consumptionIds.length) {
+      throw new ArgumentInvalidException(
+        "Duplicated consumption ids are not allowed",
+      );
     }
 
     const consumptions = await Promise.all(
       input.consumptionIds.map((id) => this.consumptionRepository.findById(id)),
     );
 
-    if (consumptions.some((c) => !c)) {
-      throw new Error("One or more consumptions not found");
+    const missingIds = input.consumptionIds.filter(
+      (_, index) => !consumptions[index],
+    );
+
+    if (missingIds.length > 0) {
+      throw new ConsumptionNotFoundError({ missingIds });
     }
 
     const validConsumptions = consumptions as NonNullable<
@@ -41,11 +58,11 @@ export class GenerateConsumptionPixPaymentUseCase {
     const firstCustomerId = validConsumptions[0].customerId;
 
     if (!validConsumptions.every((c) => c.customerId === firstCustomerId)) {
-      throw new Error("Consumptions must belong to the same customer");
+      throw new ConsumptionDoesNotBelongToCustomerError();
     }
 
-    if (validConsumptions.some((c) => c.status === "PAID")) {
-      throw new Error("One or more consumptions are already paid");
+    if (validConsumptions.some((c) => c.status === ConsumptionStatus.PAID)) {
+      throw new ConsumptionAlreadyPaidError();
     }
 
     const totalAmount = validConsumptions.reduce(
@@ -54,13 +71,13 @@ export class GenerateConsumptionPixPaymentUseCase {
     );
 
     if (totalAmount <= 0) {
-      throw new Error("Total amount must be greater than zero");
+      throw new InvalidTotalAmountError();
     }
 
     const customer = await this.customerLookup.findById(firstCustomerId);
 
     if (!customer) {
-      throw new Error("Customer not found");
+      throw new CustomerNotFoundError();
     }
 
     const payment = await this.pixPaymentPort.generateQrCode({

@@ -1,6 +1,17 @@
 import { randomUUID } from "node:crypto";
+import {
+  ArgumentNotProvidedException,
+  ArgumentOutOfRangeException,
+  ConflictException,
+} from "@libs/exceptions";
+import { ConsumptionAlreadyPaidError } from "./consumption.errors";
 
-export type ConsumptionStatus = "PENDING" | "PAID" | "OVERDUE";
+export enum ConsumptionStatus {
+  DRAFT = "DRAFT",
+  PENDING = "PENDING",
+  PAID = "PAID",
+  OVERDUE = "OVERDUE",
+}
 
 interface ConsumptionItemProps {
   productId: string;
@@ -9,18 +20,46 @@ interface ConsumptionItemProps {
 }
 
 class ConsumptionItem {
-  constructor(private readonly props: ConsumptionItemProps) {
+  private readonly _productId: string;
+  private readonly _quantity: number;
+  private readonly _unitPrice: number;
+
+  constructor(props: ConsumptionItemProps) {
     if (!props.productId) {
-      throw new Error("productId is required");
+      throw new ArgumentNotProvidedException("productId is required");
     }
 
-    if (props.quantity <= 0) {
-      throw new Error("quantity must be greater than zero");
+    if (!Number.isFinite(props.quantity) || props.quantity <= 0) {
+      throw new ArgumentOutOfRangeException(
+        "quantity must be a positive number",
+      );
     }
+
+    if (!Number.isFinite(props.unitPrice) || props.unitPrice < 0) {
+      throw new ArgumentOutOfRangeException(
+        "unitPrice must be zero or positive",
+      );
+    }
+
+    this._productId = props.productId;
+    this._quantity = props.quantity;
+    this._unitPrice = props.unitPrice;
+  }
+
+  get productId(): string {
+    return this._productId;
+  }
+
+  get quantity(): number {
+    return this._quantity;
+  }
+
+  get unitPrice(): number {
+    return this._unitPrice;
   }
 
   get total(): number {
-    return this.props.quantity * this.props.unitPrice;
+    return this._quantity * this._unitPrice;
   }
 }
 
@@ -35,18 +74,18 @@ export class Consumption {
 
   private constructor(customerId: string) {
     if (!customerId) {
-      throw new Error("customerId is required");
+      throw new ArgumentNotProvidedException("customerId is required");
     }
 
     this._id = randomUUID();
     this._customerId = customerId;
     this._createdAt = new Date();
-    this._status = "PENDING";
+    this._status = ConsumptionStatus.DRAFT;
     this._items = [];
   }
 
-  static create(custumerId: string): Consumption {
-    return new Consumption(custumerId);
+  static create(customerId: string): Consumption {
+    return new Consumption(customerId);
   }
 
   get id(): string {
@@ -74,36 +113,80 @@ export class Consumption {
   }
 
   addItem(props: ConsumptionItemProps): void {
-    this.ensureIsPending();
+    this.ensureIsDraft();
+
+    if (this._items.some((i) => i.productId === props.productId)) {
+      throw new ConflictException("Product already added to consumption");
+    }
 
     const item = new ConsumptionItem(props);
     this._items.push(item);
   }
 
+  register(): void {
+    this.ensureIsDraft();
+    this.ensureHasItems();
+    this.ensureTotalIsPositive();
+
+    this._status = ConsumptionStatus.PENDING;
+  }
+
   markAsPaid(paymentReference: string): void {
-    if (this._status === "PAID") {
-      throw new Error("Consumption already paid");
+    if (!paymentReference) {
+      throw new ArgumentNotProvidedException("paymentReference is required");
+    }
+
+    if (this._status === ConsumptionStatus.PAID) {
+      throw new ConsumptionAlreadyPaidError();
+    }
+
+    if (
+      this._status !== ConsumptionStatus.PENDING &&
+      this._status !== ConsumptionStatus.OVERDUE
+    ) {
+      throw new ConflictException(
+        "Only pending or overdue consumption can be paid",
+      );
     }
 
     if (this.totalAmount <= 0) {
-      throw new Error("Cannot pay a consumption with zero value");
+      throw new ConflictException("Cannot pay consumption with zero total");
     }
 
     this._paymentReference = paymentReference;
-    this._status = "PAID";
+    this._paidAt = new Date();
+    this._status = ConsumptionStatus.PAID;
   }
 
   markAsOverdue(): void {
-    if (this._status === "PAID") {
-      throw new Error("Cannot mark paid consumption as overdue");
+    if (this._status !== ConsumptionStatus.PENDING) {
+      throw new ConflictException(
+        "Only pending consumption can become overdue",
+      );
     }
 
-    this._status = "OVERDUE";
+    this._status = ConsumptionStatus.OVERDUE;
   }
 
-  private ensureIsPending(): void {
-    if (this._status !== "PENDING") {
-      throw new Error("Consumption is not pending");
+  private ensureIsDraft(): void {
+    if (this._status !== ConsumptionStatus.DRAFT) {
+      throw new ConflictException("Only draft consumption can be modified");
+    }
+  }
+
+  private ensureHasItems(): void {
+    if (this._items.length === 0) {
+      throw new ArgumentOutOfRangeException(
+        "Consumption must contain at least one item",
+      );
+    }
+  }
+
+  private ensureTotalIsPositive(): void {
+    if (!Number.isFinite(this.totalAmount) || this.totalAmount <= 0) {
+      throw new ArgumentOutOfRangeException(
+        "Consumption total must be greater than zero",
+      );
     }
   }
 }

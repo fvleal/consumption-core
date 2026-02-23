@@ -1,4 +1,5 @@
 import { ConsumptionRepositoryPort } from "@ports/consumption-repository-port";
+import { ConsumptionNotFoundError } from "./errors/consumption-not-found.error";
 
 export interface ConfirmConsumptionPaymentInput {
   consumptionId: string;
@@ -16,15 +17,7 @@ export class ConfirmConsumptionPaymentUseCase {
     );
 
     if (!consumption) {
-      throw new Error("Consumption not found");
-    }
-
-    if (!input.paymentReference) {
-      throw new Error("paymentReference is required");
-    }
-
-    if (consumption.status !== "PENDING" && consumption.status !== "OVERDUE") {
-      throw new Error("Payment has already been confirmed");
+      throw new ConsumptionNotFoundError();
     }
 
     consumption.markAsPaid(input.paymentReference);

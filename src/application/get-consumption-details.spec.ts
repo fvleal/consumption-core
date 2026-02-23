@@ -46,22 +46,12 @@ describe("GetConsumptionDetailsUseCase", () => {
     expect(result.items.length).toBe(2);
   });
 
-  it("Deve lançar erro quando consumptionId não for informado", async () => {
-    const useCase = new GetConsumptionDetailsUseCase(query);
-
-    await expect(useCase.execute({ consumptionId: "" })).rejects.toThrow(
-      "ConsumptionId is required",
-    );
-
-    expect(query.findById).not.toHaveBeenCalled();
-  });
-
   it("Deve lançar erro quando consumo não existir", async () => {
     query.findById.mockResolvedValue(null);
 
     const useCase = new GetConsumptionDetailsUseCase(query);
 
-    await expect(useCase.execute({ consumptionId: "invalid" })).rejects.toThrow(
+    await expect(useCase.execute({ consumptionId: "" })).rejects.toThrow(
       "Consumption not found",
     );
 

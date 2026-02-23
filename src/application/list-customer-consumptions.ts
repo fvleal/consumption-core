@@ -17,10 +17,6 @@ export class ListCustomerConsumptionsUseCase {
   async execute(
     input: ListCustomerConsumptionsInput,
   ): Promise<ListCustomerConsumptionsOutput[]> {
-    if (!input.customerId) {
-      throw new Error("CustomerId is required");
-    }
-
     const consumptions = await this.consumptionQuery.findByCustomerId(
       input.customerId,
     );
